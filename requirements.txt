@@ -1,5 +1,7 @@
 notebook==6.5.2
-gym==0.21.0
+gym==0.15.7
 numpy==1.23.5
 torch==1.13.0
 matplotlib==3.5.1
+mujoco-py<2.2,>=2.1
+patchelf==0.17.0.0
