@@ -53,7 +53,7 @@ class SurrGradSpike(torch.autograd.Function):
 
 class DSNN(nn.Module):
     def __init__(self, architecture, seed, alpha, beta, weight_scale, batch_size, threshold,
-                 simulation_time, learning_rate, reset_potential=0):
+                 simulation_time, learning_rate, reset_potential=0, spk_out_sum=False):
         """
 
         """
@@ -70,6 +70,8 @@ class DSNN(nn.Module):
         self.threshold = threshold
         self.simulation_time = simulation_time
         self.reset_potential = reset_potential
+
+        self.spk_out_sum = spk_out_sum # Sums output layer spikes over simulation timesteps
 
         self.spike_fn = SurrGradSpike.apply
 
@@ -88,13 +90,14 @@ class DSNN(nn.Module):
     def forward(self, inputs):
         syn = []
         mem = []
-        spk_count = []
 
         for l in range(0, len(self.weights)):
             syn.append(torch.zeros((self.batch_size, self.weights[l].shape[1]), device=device,
                                    dtype=torch.float))
             mem.append(torch.zeros((self.batch_size, self.weights[l].shape[1]), device=device,
                                    dtype=torch.float))
+
+        spk_count = mem[-1]
 
         # Here we define two lists which we use to record the membrane potentials and output spikes
         mem_rec = []
@@ -135,21 +138,31 @@ class DSNN(nn.Module):
                     c = (mthr > 0)
                     new_mem[c] = self.reset_potential
                     spk_rec[-1].append(out)
+                
+                spk_count += out
 
                 mem[l] = new_mem
                 syn[l] = new_syn
 
                 mem_rec[-1].append(mem[l])
 
-        # return the final recorded membrane potential in the output layer, all membrane potentials,
-        # and spikes
-        return mem_rec[-1][-1], mem_rec, spk_rec
+        if self.spk_out_sum:
+            return spk_count
+        else:
+            # return the final recorded membrane potential in the output layer, all membrane potentials,
+            # and spikes
+            return mem_rec[-1][-1], mem_rec, spk_rec
 
     def load_state_dict(self, layers):
         """Method to load weights and biases into the network"""
         weights = layers[0]
         for l in range(0,len(weights)):
             self.weights[l] = weights[l].detach().clone().requires_grad_(True)
+
+    def load_weights(self, weights, grad=False):
+        """Method to load weights and biases into the network"""
+        for l in range(0,len(weights)):
+            self.weights[l] = weights[l].detach().clone().requires_grad_(grad)
 
     def state_dict(self):
         """Method to copy the layers of the SQN. Makes explicit copies, no references."""

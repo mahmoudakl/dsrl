@@ -85,6 +85,7 @@ class DSNN(nn.Module):
         return spk_out, (mem, syn), (mem_out, syn_out)
 
 
+
 class DSRNN(DSNN):
     def __init__(self,
         state_size,
