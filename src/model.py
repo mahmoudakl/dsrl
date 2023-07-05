@@ -161,8 +161,11 @@ class DSNN(nn.Module):
 
     def load_weights(self, weights, grad=False):
         """Method to load weights and biases into the network"""
-        for l in range(0,len(weights)):
-            self.weights[l] = weights[l].detach().clone().requires_grad_(grad)
+        if isinstance(weights, list):
+            for l in range(0,len(weights)):
+                self.weights[l] = weights[l].detach().clone().requires_grad_(grad).to(self.device)
+        else:
+            self.weights[0] = weights.detach().clone().requires_grad_(grad).to(self.device)
 
     def state_dict(self):
         """Method to copy the layers of the SQN. Makes explicit copies, no references."""
