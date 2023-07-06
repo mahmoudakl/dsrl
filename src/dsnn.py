@@ -229,3 +229,87 @@ class RSTDPNet(nn.Module):
         rstdp_out = self.rstdp(y_l1, y_l2, rstdp_state)
         
         return mem_result[0], rstdp_out
+
+class TDDeltaNet(nn.Module):
+    def __init__(self, alpha, beta, threshold, architecture, simulation_time, weights, tau=16, tau_e=800,
+                 A_plus=0.00001, A_minus=0.00001, C=0.01, device=default_device, dtype=torch.float):
+        super(TDDeltaNet, self).__init__()
+
+        self.simulation_time = simulation_time
+        self.device = device
+        self.dtype = dtype
+
+        self.l1 = DSNN(
+            state_size=(architecture[1],),
+            operation=partial(torch.einsum, 'ab,bc->ac'),
+            weights_size=(architecture[0], architecture[1]),
+            alpha=alpha,
+            beta=beta,
+            threshold=threshold,
+            device=self.device,
+            dtype=self.dtype
+        )
+        # Set 'requires_grad' to 'False', since value assignment is not supported otherwise
+        self.l1.weights = nn.Parameter(weights[0][0].clone(), requires_grad=False)
+        self.l2 = DSNN(
+            state_size=(architecture[2],),
+            operation=partial(torch.einsum, 'ab,bc->ac'),
+            weights_size=(architecture[1], architecture[2]),
+            alpha=alpha,
+            beta=beta,
+            threshold=threshold,
+            device=self.device,
+            dtype=self.dtype
+        )
+        # As above, set 'requires_grad' to 'False', since value assignment is not supported otherwise
+        self.l2.weights = nn.Parameter(weights[0][1].clone(), requires_grad=False)
+        self.l3 = DSNN(
+            state_size=(architecture[3],),
+            operation=partial(torch.einsum, 'ab,bc->ac'),
+            weights_size=(architecture[2], architecture[3]),
+            alpha=alpha,
+            beta=beta,
+            threshold=threshold,
+            is_spiking=False,
+            device=self.device,
+            dtype=self.dtype
+        )
+        self.l3.weights = nn.Parameter(weights[0][2].clone(), requires_grad=False)
+
+        self.value = DSNN(
+            state_size=(1,),
+            operation=partial(torch.einsum, 'ab,bc->ac'),
+            weights_size=(architecture[2], 1),
+            alpha=alpha,
+            beta=beta,
+            threshold=threshold,
+            is_spiking=False,
+            device=self.device,
+            dtype=self.dtype
+        )
+        self.value.weights = nn.Parameter(torch.zeros((architecture[2], 1)).to(self.device), requires_grad=False)
+
+    def forward(self, inputs):
+        # Two neuron encoding
+        inputs = transform_state(inputs)
+        # Expand analogue inputs for each timestep
+        inputs = torch.tile(inputs, (1, self.simulation_time, 1)).to(self.device)
+
+        # Calculate layers
+        y_l1, _, _ = self.l1(inputs)
+        y_l2, _, _ = self.l2(y_l1)
+        _, mem_result, _ = self.l3(y_l2)
+        
+        return mem_result[0]
+
+    def get_hidden(self, inputs):
+        # Two neuron encoding
+        inputs = transform_state(inputs)
+        # Expand analogue inputs for each timestep
+        inputs = torch.tile(inputs, (1, self.simulation_time, 1)).to(self.device)
+
+        # Calculate layers
+        y_l1, _, _ = self.l1(inputs)
+        y_l2, _, _ = self.l2(y_l1)
+        
+        return y_l2
