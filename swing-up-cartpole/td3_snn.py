@@ -8,6 +8,7 @@ from tqdm import trange
 
 import torch
 import torch.nn.functional as F
+from collections import namedtuple
 
 from typing import Any
 import gymnasium as gym
@@ -57,10 +58,13 @@ time_step = 0
 alpha = 0.5
 beta = 0.5
 weight_scale = 1
-threshold = 2.5
+threshold = 110
 sim_time = 5
 two_neuron_encoding = True
 spiking = True
+quantization = True
+
+QTensor = namedtuple('QTensor', ['tensor', 'scale', 'zero_point'])
 
 
 def normalize_state(state, max_obs):
@@ -70,16 +74,40 @@ def normalize_state(state, max_obs):
 
 
 def save_models(actor, target_actor, critic_1, target_critic_1, critic_2, target_critic_2,
-                result_dir, episode_num):
+                result_dir, episode_num, q_actor=None):
     actor.save_checkpoint(result_dir, episode_num)
     target_actor.save_checkpoint(result_dir, episode_num)
     critic_1.save_checkpoint(result_dir)
     critic_2.save_checkpoint(result_dir)
     target_critic_1.save_checkpoint(result_dir)
     target_critic_2.save_checkpoint(result_dir)
+    if q_actor is not None:
+        q_actor.save_checkpoint(result_dir, episode_num)
 
 
-def choose_action(actor, observation, max_action, min_action, n_actions, max_obs):
+def quantize_tensor(x, min_val, max_val, qmin=-127, qmax=127):
+    scale = (max_val - min_val)/(qmax - qmin)
+
+    zero_point = 0
+    q_x = zero_point + (x/scale)
+    q_x.clamp(qmin, qmax).round_()
+    q_x = q_x.round().int()
+    return QTensor(tensor=q_x, scale=scale, zero_point=zero_point)
+
+
+def quantize_weights(weights):
+    combined_weights = torch.cat([torch.flatten(w) for w in weights])
+    min_val = torch.min(combined_weights)
+    max_val = torch.max(combined_weights)
+    quantized_weights = []
+    for w in weights:
+        w = quantize_tensor(w, min_val, max_val, qmin=-127, qmax=127).tensor
+        quantized_weights.append(w)
+
+    return quantized_weights
+
+
+def choose_action(actor, observation, max_action, min_action, n_actions, max_obs, q_actor=None):
     global time_step
     if time_step < warmup:
         mu = torch.tensor(np.random.normal(scale=noise, size=n_actions),
@@ -92,7 +120,13 @@ def choose_action(actor, observation, max_action, min_action, n_actions, max_obs
             state = torch.tensor(observation, dtype=torch.float).clone().to(device)
         if spiking:
             state = state.unsqueeze(0).to(device)
-            mu = actor.forward(state)[0].squeeze(0).to(device)
+            if q_actor is not None:
+                weights = actor.weights
+                q_weights = [q_w.float() for q_w in quantize_weights(weights)]
+                q_actor.weights = q_weights
+                mu = q_actor.forward(state)[0].squeeze(0).to(device)
+            else:
+                mu = actor.forward(state)[0].squeeze(0).to(device)
         else:
             mu = actor.forward(state).to(device)
 
@@ -115,6 +149,7 @@ def learn(actor, target_actor, critic_1, target_critic_1, critic_2, target_criti
         return
 
     state, action, reward, state_, done = memory.sample_buffer(batch_size)
+    #print(action)
 
     state = torch.tensor(state, dtype=torch.float).to(device)
     action = torch.tensor(action, dtype=torch.float).to(device)
@@ -332,6 +367,12 @@ def run_data_generator(controller_name: str, environment_name: str, config_manag
     target_actor = TD3ActorDSNN(actor_architecture, 0, alpha, beta, weight_scale, 1, threshold,
                                 sim_time, actor_learning_rate, name='target_actor', device=device)
 
+    if quantization:
+        q_actor = TD3ActorDSNN(actor_architecture, 0, alpha, beta, weight_scale, 1, threshold,
+                               sim_time, actor_learning_rate, name='quantized_actor', device=device)
+    else:
+        q_actor = None
+
     critic_1 = TD3CriticNetwork(critic_learning_rate, input_dims, layer1_size, layer2_size,
                                 n_actions=n_actions, name='critic_1')
     target_critic_1 = TD3CriticNetwork(critic_learning_rate, input_dims, layer1_size, layer2_size,
@@ -386,8 +427,8 @@ def run_data_generator(controller_name: str, environment_name: str, config_manag
         num_iterations = config_manager("config")["num_iterations"]
         for step in range(num_iterations):
             #action = controller.step(obs, updated_attributes=env.environment_attributes)
-            #action = np.array([np.random.rand()], dtype=np.float32)
-            action = choose_action(actor, obs, max_action, min_action, n_actions, max_obs)
+            action = choose_action(actor, obs, max_action, min_action, n_actions, max_obs,
+                                   q_actor=q_actor)
             new_obs, reward, terminated, truncated, info = env.step(action)
             max_obs = update_max_obs(new_obs, max_obs)
             if two_neuron_encoding:
@@ -417,7 +458,6 @@ def run_data_generator(controller_name: str, environment_name: str, config_manag
             memory.store_transition(obs, action, reward, new_obs, done)
             score += reward
 
-
             time.sleep(1e-6)
 
             obs = new_obs
@@ -444,7 +484,7 @@ def run_data_generator(controller_name: str, environment_name: str, config_manag
             print("\rEpisode: ", episode_counter, 'training steps: ', learn_step_counter,
                   "Average Score: %.2f" % avg_score)
             save_models(actor, target_actor, critic_1, target_critic_1, critic_2, target_critic_2,
-                        'snn_results/', episode_counter)
+                        'snn_results/', episode_counter, q_actor=q_actor)
 
         # Close the env
     env.close()
