@@ -127,6 +127,7 @@ class Agent():
         self.mutually_exclusive = mutually_exclusive
         self.pop_size = pop_size
         self.obs_range = obs_range
+        self.seed = seed
 
         if self.pop_coding:
             self.pop_disp = [(i[1] - i[0])/(pop_size + 1) for i in obs_range]
@@ -380,7 +381,7 @@ class Agent():
 
         while self.learn_step_counter < self.n_timesteps + 1:
             self.episode_counter += 1
-            observation = self.env.reset()
+            observation, info = self.env.reset(seed=self.seed)
             self.update_max_obs(observation)
             if self.two_neuron:
                 observation = self.transform_state(observation)
@@ -388,7 +389,8 @@ class Agent():
             score = 0
             while not done:
                 action = self.choose_action(observation)
-                observation_, reward, done, info = self.env.step(action)
+                observation_, reward, done1, done2, info = self.env.step(action)
+                done = done1 or done2
                 self.update_max_obs(observation_)
                 if self.two_neuron:
                     observation_ = self.transform_state(observation_)

@@ -1,9 +1,9 @@
 import sys
-import gym
 import torch
 import random
 
 import numpy as np
+import gymnasium as gym
 import torch.nn.functional as F
 
 from model import DSNN
@@ -55,7 +55,6 @@ class Agent:
                  spiking=False, two_neuron=False):
 
         self.env = gym.make(env)
-        self.env.seed(seed)
 
         random.seed(seed)
         np.random.seed(seed)
@@ -83,6 +82,7 @@ class Agent:
         self.spiking = spiking
         self.random = random
         self.two_neuron = two_neuron
+        self.seed = seed
 
         # Initialize Replay Memory
         self.memory = ReplayBuffer(self.memory_size, self.batch_size, seed)
@@ -167,7 +167,7 @@ class Agent:
         eps = self.eps_start
 
         for i_episode in range(1, self.num_episodes + 1):
-            state = self.env.reset()
+            state, _ = self.env.reset(seed=self.seed)
             if self.two_neuron:
                 state = self.transform_state(state)
             score = 0
@@ -175,7 +175,8 @@ class Agent:
             while not done:
                 self.t_step_total += 1
                 action = self.select_action(state, eps)
-                next_state, reward, done, _ = self.env.step(action)
+                next_state, reward, done1, done2, _ = self.env.step(action)
+                done = done1 or done2
                 if self.two_neuron:
                     next_state = self.transform_state(next_state)
                 self.step(state, action, reward, next_state, done)
